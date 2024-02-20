@@ -55,7 +55,8 @@ enum STATUS_CODE
 };
 
 // 定义结构体来保存任务参数
-typedef struct {
+typedef struct TaskArgs
+{
     int client_fd;
     MYSQL *mysql;
 } TaskArgs;
@@ -86,6 +87,8 @@ static char *getCurrentTime();
 static int addFriend(int client_fd, json_object *json, MYSQL *mysql);
 /* 删除好友 */
 static int delFriend(int client_fd, json_object *json, MYSQL *mysql);
+/* 添加群组 */
+static int addGroup(int client_fd, json_object *json, MYSQL *mysql);
 /* 群聊 */
 static int groupChat(int client_fd, json_object *json, MYSQL *mysql);
 /* 发送消息给群成员 */
@@ -110,7 +113,7 @@ static int JoinPath(char *path, const char *dir, const char *filename)
 }
 
 /* 主函数 */
-int main(int argc, char *argv[])
+int main()
 {   
     //创建文件传输缓存目录
     if(access("./fileDirectory", F_OK) == -1)
@@ -370,7 +373,7 @@ void *handleRequest(void* arg)
             perror("recv error");
             return NULL;
         }
-        if(ret == 0)
+        if(ret == 0)//对方关闭连接
         {
             printf("client disconnect\n");
             /* 移除在线状态 */
@@ -466,10 +469,17 @@ void *handleRequest(void* arg)
         }
         else if(strcmp(typeStr, "createGroupChat") == 0)
         {
-            /* 创建群聊 */
+            /* 创建群组 */
             /* 消除没用的请求类型*/
             json_object_object_del(jobj, "type");
             createGroupChat(client_fd, jobj, mysql);
+        }
+        else if(strcmp(typeStr, "addGroup") == 0)
+        {
+            /* 添加群聊名称 */
+            /* 消除没用的请求类型*/
+            json_object_object_del(jobj, "type");
+            addGroup(client_fd, jobj, mysql);
         }
         else if(strcmp(typeStr, "fileUpload") == 0)
         {
@@ -1166,9 +1176,7 @@ static int addFriend(int client_fd, json_object *json, MYSQL *mysql)
                         /* 构成双向好友 */
                         json_object_object_add(returnJson, "receipt", json_object_new_string("success"));
                         json_object_object_add(returnJson, "reason", json_object_new_string("添加成功"));
-                    }
-                    else
-                    {
+                    }     {
                         /* 不构成双向好友 */
                         /* 转发消息 */
                         char message[CONTENT_SIZE] = {0};
@@ -1178,6 +1186,69 @@ static int addFriend(int client_fd, json_object *json, MYSQL *mysql)
                         json_object_object_add(returnJson, "reason", json_object_new_string("已发出申请"));
                     }
                 }
+            }
+        }
+    }
+    /* 释放结果集 */
+    if (res != NULL)
+    {
+        mysql_free_result(res);
+        res = NULL;
+    }
+    /* 发送json */
+    const char *returnJsonStr = json_object_to_json_string(returnJson);
+    printf("send json: %s\n", returnJsonStr);
+    ret = send(client_fd, returnJsonStr, strlen(returnJsonStr), 0);
+    if(ret < 0)
+    {
+        perror("send error");
+        return SEND_ERROR;
+    }
+
+    return SUCCESS;
+}
+
+/* 添加群组名 */
+static int addGroup(int client_fd, json_object *json, MYSQL *mysql)
+{
+    printf("添加群名\n");
+    /* 返回用json */
+    json_object *returnJson = json_object_new_object();
+    /* 转发用json */
+    json_object *forwardJson = json_object_new_object();
+    int ret = 0;
+    /* 获取json中的内容 */
+    const char *groupname = json_object_get_string(json_object_object_get(json, "groupname"));
+    const char *username = json_object_get_string(json_object_object_get(json, "name"));
+    printf("groupname: %s\n", groupname);
+    printf("username: %s\n", username);
+    /* 查询数据库 */
+    char sql[MAX_SQL_LEN] = {0};
+    sprintf(sql, "select * from chatgroups where groupMainName='%s'", groupname);
+    printf("sql: %s\n", sql);
+    MYSQL_RES *res = NULL;
+    if (sqlQuery(sql, mysql, &res) != 0)
+    {
+        printf("sql query error:%s\n", mysql_error(mysql));
+        json_object_object_add(returnJson, "receipt", json_object_new_string("fail"));
+        json_object_object_add(returnJson, "reason", json_object_new_string("数据库查询错误"));
+    }
+    else
+    {
+        /* 处理数据库查询结果 */
+        int num_rows = mysql_num_rows(res);     // 行数
+        printf("num_rows: %d\n", num_rows);
+        if (num_rows == 0)
+        {
+            /* 不存在用户 */
+            memset(sql, 0, sizeof(sql));
+            sprintf(sql, "insert into group_members(group_name, member_name, messages_num) values('%s', '%s', 0)", groupname, username);
+            printf("sql: %s\n", sql);
+            if (mysql_query(mysql, sql) != 0)
+            {
+                printf("sql insert error:%s\n", mysql_error(mysql));
+                json_object_object_add(returnJson, "receipt", json_object_new_string("fail"));
+                json_object_object_add(returnJson, "reason", json_object_new_string("数据库插入错误"));
             }
         }
     }
@@ -1269,7 +1340,7 @@ static int groupChat(int client_fd, json_object *json, MYSQL *mysql)
 
     /* 获取json中的内容 */
     const char *name = json_object_get_string(json_object_object_get(json, "name"));
-    const char *groupName = json_object_get_string(json_object_object_get(json, "groupName"));
+    const char *groupName = json_object_get_string(json_object_object_get(json, "groupname"));
     const char *message = json_object_get_string(json_object_object_get(json, "message"));
     printf("name: %s\n", name);
     printf("groupName: %s\n", groupName);
@@ -1364,7 +1435,7 @@ static int sendMessageToGroup(const char *sendName, const char *groupName, const
             json_object_object_add(forwardJson, "type", json_object_new_string("groupchat"));
             json_object_object_add(forwardJson, "name", json_object_new_string(sendName));
             json_object_object_add(forwardJson, "message", json_object_new_string(message));
-            json_object_object_add(forwardJson, "groupName", json_object_new_string(groupName));
+            json_object_object_add(forwardJson, "groupname", json_object_new_string(groupName));
             json_object_object_add(forwardJson, "time", json_object_new_string(getCurrentTime()));
             const char *forwardJsonStr = json_object_to_json_string(forwardJson);
             printf("send json: %s\n", forwardJsonStr);
@@ -1416,15 +1487,15 @@ static int createGroupChat(int client_fd, json_object *json, MYSQL *mysql)
     printf("创建群组\n");
     /* 获取创建信息 */
     const char *name = json_object_get_string(json_object_object_get(json, "name"));
-    const char *groupName = json_object_get_string(json_object_object_get(json, "groupName"));
+    const char *groupname = json_object_get_string(json_object_object_get(json, "groupname"));
     printf("name: %s\n", name);
-    printf("groupName: %s\n", groupName);
+    printf("groupName: %s\n", groupname);
     /* 返回用json */
     json_object *returnJson = json_object_new_object();
     json_object_object_add(returnJson, "type", json_object_new_string("createGroupChat"));
     /* 查询数据库 */
     char sql[MAX_SQL_LEN] = {0};
-    sprintf(sql, "select * from chatgroups where group_name='%s'", groupName);
+    sprintf(sql, "select * from chatgroups where group_name='%s'", groupname);
     printf("sql: %s\n", sql);
     MYSQL_RES *res = NULL;
     if (sqlQuery(sql, mysql, &res) != 0)
@@ -1448,10 +1519,11 @@ static int createGroupChat(int client_fd, json_object *json, MYSQL *mysql)
         {
             /* 群组不存在 */
             /* 插入数据库 */
-            sprintf(sql, "insert into chatgroups(group_name, groupMainName) values('%s', '%s')", groupName, name);
+            sprintf(sql, "insert into chatgroups(group_name, groupMainName) values('%s', '%s')", groupname, name);
             printf("sql: %s\n", sql);
             if (mysql_query(mysql, sql) != 0)
             {
+                printf("\\\n\n");
                 printf("sql insert error:%s\n", mysql_error(mysql));
                 json_object_object_add(returnJson, "receipt", json_object_new_string("fail"));
                 json_object_object_add(returnJson, "reason", json_object_new_string("数据库插入错误"));
@@ -1529,7 +1601,7 @@ static int fileUpload(int client_fd, json_object *json,  MYSQL *mysql)
     if (file_fd < 0) 
     {
         perror("创建文件失败");
-        exit(EXIT_FAILURE);
+        return ILLEGAL_ACCESS;
     }
     int ret = receiveFile(client_fd, file_fd);
     if(ret == 0)
