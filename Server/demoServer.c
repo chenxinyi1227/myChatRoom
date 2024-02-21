@@ -367,7 +367,7 @@ void *handleRequest(void* arg)
 {
     /* 线程分离 */
     int ret = pthread_detach(pthread_self());
-    if (ret != 0)
+    if (ret != 0 && ret != EINVAL)//pthread_detach error: 22
     {
         fprintf(stderr, "pthread_detach error: %d\n", ret);
         return NULL;
