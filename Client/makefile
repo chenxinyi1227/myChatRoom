@@ -1,12 +1,12 @@
 src=*.c
 client: ${src}
-	gcc ${src} -o a.out -ljson-c 
+	gcc ${src} -o client -ljson-c 
 
 g:${src}
 	gcc -g ${src} -o gtest -ljson-c 
 
 clean:
-	@rm -rf	a.out gtest
+	@rm -rf	client gtest
 
 var:
 	valgrind --leak-check=full ./client

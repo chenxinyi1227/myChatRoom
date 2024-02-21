@@ -377,4 +377,3 @@ int threadPollDestroy(thread_poll_t *thread_poll)
 
     return SUCCESS;
 }
-

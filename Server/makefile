@@ -1,6 +1,6 @@
 src=*.c
 server: ${src}
-	gcc ${src} -o a.out -ljson-c -lmysqlclient
+	gcc ${src} -o server -ljson-c -lmysqlclient
 
 g:${src}
 	gcc -g ${src} -o gtest -ljson-c -lmysqlclient
@@ -10,4 +10,4 @@ var:
 #valgrind --tool=memcheck ./server
 
 clean:
-	@rm -rf a.out gtest
+	@rm -rf server gtest

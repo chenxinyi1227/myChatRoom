@@ -36,7 +36,5 @@ int ChatRoomShowGroupChat(int sockfd, json_object *groups, const char *username,
 int ChatRoomGroupChat(int sockfd, const char *name, json_object *groups, const char *username, const char *path);
 
 /* 退出群聊 */
-int ChatRoomExitGroupChat(int sockfd, const char *groupname, const char *username);
-
-
+int ChatRoomExitGroupChat(int sockfd, const char *groupname, json_object *groups, const char *username);
 #endif // __CHAT_ROOM_H__
