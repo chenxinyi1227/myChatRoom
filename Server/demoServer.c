@@ -51,6 +51,7 @@ enum STATUS_CODE
     OTHER_ERROR = -12,  // 其他错误
     DATABASE_ERROR = -13,// 数据库错误
     SETSOCKOPT_ERROR = -14,// 设置socket选项错误
+    THREAD_CREATE_ERROR = -15 //线程创建错误
 
 };
 
@@ -349,7 +350,7 @@ int main()
         if (ret != 0)
         {
             perror("thread create error");
-            exit(-1);
+            exit(THREAD_CREATE_ERROR);
         }
 #else 
         /* 添加到任务队列 */   
