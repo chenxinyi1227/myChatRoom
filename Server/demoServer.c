@@ -15,6 +15,7 @@
 #include <json-c/json.h>
 #include <mysql/mysql.h>
 #include <fcntl.h>
+#include <myAVLTree.h>
 
 #define SERVER_PORT 8888        // 服务器端口号,暂定为8888
 #define SERVER_IP "172.18.188.222"   // 服务器ip,暂定为本机ip
@@ -61,6 +62,21 @@ typedef struct TaskArgs
     int client_fd;
     MYSQL *mysql;
 } TaskArgs;
+
+int printfData(void *args)
+{
+    int ret = 0;
+    int val = *(int *)args;
+    printf("val:%s\n", val);
+    return ret;
+}
+int compareFunc(void *arg1, void *arg2)
+{
+    char *str1 = (char *)arg1;
+    char *str2 = (char *)arg2;
+
+    return strcmp(str1, str2);
+}
 
 /* 接收请求并分类/处理请求 */
 void *handleRequest(void* arg);
@@ -116,23 +132,9 @@ static int JoinPath(char *path, const char *dir, const char *filename)
     return SUCCESS;
 }
 
-/* 主函数 */
-int main()
-{   
-    //创建文件传输缓存目录
-    if(access("./fileDirectory", F_OK) == -1)
-    {
-        if (mkdir("./fileDirectory", 0777) == -1)
-        {
-            perror("mkdir error");
-            return MALLOC_ERROR;
-        }
-    }
-
-    /* 初始化线程池 */
-    thread_poll_t poll;
-    threadPollInit(&poll, MIN_POLL_NUM, MAX_POLL_NUM, MAX_QUEUE_NUM);
-
+//socket初始化
+int inet_init(int *sockfd)
+{
     /* 初始化服务 */ 
     int server_fd = socket(AF_INET, SOCK_STREAM, 0);
     if (server_fd < 0)
@@ -170,6 +172,13 @@ int main()
     }
     printf("server start success\n");
 
+    *sockfd = server_fd;
+    return SUCCESS;
+}
+
+//数据库初始化和建立表
+int mysql_Table_Init(MYSQL **recvSQL)
+{
     /* 初始化数据库 */
     MYSQL *mysql = mysql_init(NULL);
     if (mysql == NULL)
@@ -178,7 +187,6 @@ int main()
         return DATABASE_ERROR;
     }
 
-    {
     /* 连接数据库 */
     mysql_real_connect(mysql, "localhost", "root", "1234", "mytest", 3306, NULL, 0);
     if (mysql == NULL)
@@ -314,9 +322,44 @@ int main()
         return DATABASE_ERROR;
     }
     memset(sql, 0, sizeof(sql));
-    
+    *recvSQL = mysql;
+    return SUCCESS;
+}
 
+/* 主函数 */
+int main()
+{   
+    //创建文件传输缓存目录
+    if(access("./fileDirectory", F_OK) == -1)
+    {
+        if (mkdir("./fileDirectory", 0777) == -1)
+        {
+            perror("mkdir error");
+            return MALLOC_ERROR;
+        }
     }
+
+    /* 初始化线程池 */
+    thread_poll_t poll;
+    threadPollInit(&poll, MIN_POLL_NUM, MAX_POLL_NUM, MAX_QUEUE_NUM);
+
+    /* 初始化服务 */ 
+    int server_fd;
+    int retser = inet_init(&server_fd);
+    if(retser == CONNECT_ERROR)
+    {
+        printf("init error\n");
+    }
+    printf("inet_init success\n");
+    
+    //连接数据库并建表
+    MYSQL *mysql;
+    int retsql = mysql_Table_Init(&mysql);
+    if(retsql == DATABASE_ERROR)
+    {
+        printf("mysal_table_init error");
+    } 
+    printf("mysql_Table_Init success\n");
 
     /* 创建套接字 */
     struct sockaddr_in client_addr;
@@ -346,7 +389,7 @@ int main()
 #if 1
         pthread_t tid;
         /* 开一个线程去服务acceptfd */
-        ret = pthread_create(&tid, NULL, handleRequest, (void *)args);
+        int ret = pthread_create(&tid, NULL, handleRequest, (void *)args);
         if (ret != 0)
         {
             perror("thread create error");
@@ -1230,70 +1273,6 @@ static int addFriend(int client_fd, json_object *json, MYSQL *mysql)
 
     return SUCCESS;
 }
-#if 0
-/* 添加群组名 */
-static int addGroup(int client_fd, json_object *json, MYSQL *mysql)
-{
-    printf("添加群名\n");
-    /* 返回用json */
-    json_object *returnJson = json_object_new_object();
-    /* 转发用json */
-    json_object *forwardJson = json_object_new_object();
-    int ret = 0;
-    /* 获取json中的内容 */
-    const char *groupname = json_object_get_string(json_object_object_get(json, "groupname"));
-    const char *username = json_object_get_string(json_object_object_get(json, "name"));
-    printf("groupname: %s\n", groupname);
-    printf("username: %s\n", username);
-    /* 查询数据库 */
-    char sql[MAX_SQL_LEN] = {0};
-    sprintf(sql, "select * from chatgroups where groupMainName='%s'", groupname);
-    printf("sql: %s\n", sql);
-    MYSQL_RES *res = NULL;
-    if (sqlQuery(sql, mysql, &res) != 0)
-    {
-        printf("sql query error:%s\n", mysql_error(mysql));
-        json_object_object_add(returnJson, "receipt", json_object_new_string("fail"));
-        json_object_object_add(returnJson, "reason", json_object_new_string("数据库查询错误"));
-    }
-    else
-    {
-        /* 处理数据库查询结果 */
-        int num_rows = mysql_num_rows(res);     // 行数
-        printf("num_rows: %d\n", num_rows);
-        if (num_rows >= 0)
-        {
-            /* 存在用户 */
-            memset(sql, 0, sizeof(sql));
-            sprintf(sql, "insert into group_members(group_name, member_name, messages_num) values('%s', '%s', 0)", groupname, username);
-            printf("sql: %s\n", sql);
-            if (mysql_query(mysql, sql) != 0)
-            {
-                printf("sql insert error:%s\n", mysql_error(mysql));
-                json_object_object_add(returnJson, "receipt", json_object_new_string("fail"));
-                json_object_object_add(returnJson, "reason", json_object_new_string("数据库插入错误"));
-            }
-        }
-    }
-    /* 释放结果集 */
-    if (res != NULL)
-    {
-        mysql_free_result(res);
-        res = NULL;
-    }
-    /* 发送json */
-    const char *returnJsonStr = json_object_to_json_string(returnJson);
-    printf("send json: %s\n", returnJsonStr);
-    ret = send(client_fd, returnJsonStr, strlen(returnJsonStr), 0);
-    if(ret < 0)
-    {
-        perror("send error");
-        return SEND_ERROR;
-    }
-
-    return SUCCESS;
-}
-#endif
 
 /* 删除好友 */
 static int delFriend(int client_fd, json_object *json, MYSQL *mysql)
@@ -1572,6 +1551,51 @@ static int createGroupChat(int client_fd, json_object *json, MYSQL *mysql)
     {
         perror("send error");
         return SEND_ERROR;
+    }
+    return SUCCESS;
+}
+
+/* 检查数据库是否有重复 */
+static int IsDuplicate(const char *groupName, const char *name, MYSQL *mysql)
+{
+    AVLTree *myTree = NULL;
+    AVLTreeInit(&myTree, compareFunc, printfData);
+    
+    char query[MAX_SQL_LEN] = {0};
+    MYSQL_RES *res = NULL;
+    sprintf(query, "select member_name from group_members where group_name='%s'", groupName);
+    if (sqlQuery(query, mysql , &res) != 0) 
+    {
+        printf("sql query error:%s\n", mysql_error(mysql));
+    }
+    int num = mysql_num_rows(res);//返回行数
+    MYSQL_ROW row;
+    while((row = mysql_fetch_row(res)) != NULL)
+    {
+        for(int i = 0; i < num; i++)
+        {
+            printf("%s\t", row[i]);
+            AVLTreeInsert(myTree, (void*)&row[i]);
+            if(i == num - 1)
+            {
+                printf("\n");
+            }
+        }
+    }
+    int ret = AVLTreeIsContainAppointVal(myTree, (void                                                                                                                                     *)&name);
+    if(ret)
+    {
+        printf("此成员存在\n");
+    }
+    else
+    {
+        printf("此成员不存在\n");
+    }
+    AVLTreeMidOrderTraverse(myTree);
+    if (res != NULL)
+    {
+        mysql_free_result(res);
+        res = NULL;
     }
     return SUCCESS;
 }
