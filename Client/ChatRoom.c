@@ -73,6 +73,12 @@ static int ChatRoomMain(int fd, json_object *json);
 static int ChatRoomLogout(int fd, const char *username);
 /* 将未读消息写入本地文件 */
 static int ChatRoomSaveUnreadMsg(json_object *json, const char *path);
+//上传文件
+static int fileUpload(int sockfd);
+//下载文件
+static int fileDown(int sockfd, const char *userName);
+/* 下载写入文件 */
+static int fileDownLoad(int sockfd, json_object *json);
 
 /* 发送json到服务器 */
 static int SendJsonToServer(int fd, const char *json)
@@ -124,6 +130,7 @@ static int JoinPath(char *path, const char *dir, const char *filename)
 //获取文件目录下的文件
 int getDirectoryFiles(const char* directory_path) 
 {
+
     DIR* directory = opendir(directory_path);
     struct dirent* entry;
 
@@ -476,6 +483,9 @@ int ChatRoomShowFriends(int sockfd, json_object* friends, const char *username, 
                 /* 创建私聊的本地聊天记录文件 */
                 char privateChatRecord[PATH_SIZE] = {0};
                 JoinPath(privateChatRecord, path, name);
+                // /* 清空缓存区 */
+                int c;
+                while ((c = getchar()) != '\n' && c != EOF);
                 ChatRoomPrivateChat(sockfd, name, friends,username,privateChatRecord);
                 memset(name, 0, NAME_SIZE);
                 break;
@@ -615,9 +625,9 @@ int ChatRoomPrivateChat(int sockfd, const char *name, json_object *friends, cons
         
 
         // printf("请输入要私聊的内容:");
-        /* 清空缓存区 */
-        int c;
-        while ((c = getchar()) != '\n' && c != EOF);
+        // /* 清空缓存区 */
+        // int c;
+        // while ((c = getchar()) != '\n' && c != EOF);
         /* 使用 fgets 读取整行输入 */
         if (fgets(message, sizeof(message), stdin) == NULL) 
         {
@@ -859,6 +869,12 @@ static void* ChatRoomRecvMsg(void* args)
                 continue;
             }
 
+            /* 下载文件 */
+            if (strcmp(type, "fileDown") == 0)
+            {
+                fileDownLoad(sockfd,jobj);
+            }
+
             /* 获取发送人 */
             json_object *nameJson = json_object_object_get(jobj, "name");
             if (nameJson == NULL)
@@ -1064,7 +1080,7 @@ int ChatRoomShowGroupChat(int sockfd, json_object *groups, const char *username,
 {
     while(1)
     {
-        // system("clear");
+        system("clear");
         if(ChatRoomPrintGroups(groups) != SUCCESS)
         {
             return SUCCESS;
@@ -1241,7 +1257,7 @@ static int fileUpload(int sockfd)
     printf("请输入要上传的文件名:");
     char dest_dir[MAX_PATH] = {0}; // 目标目录路径
     scanf("%s", dest_dir);
-
+    printf("上传的文件：%s\n", dest_dir);
     char dest_path[MAX_PATH * 2] = {0}; // 目标文件路径
     JoinPath(dest_path, src_path, dest_dir);
     printf("dest_path:%s\n", dest_path);
@@ -1262,8 +1278,6 @@ static int fileUpload(int sockfd)
         return ILLEGAL_ACCESS;
     }
     printf("打开文件成功\n");
-    sleep(1);
-
 
     //读取文件内容并发送
     size_t bytes_read;
@@ -1286,17 +1300,95 @@ static int fileUpload(int sockfd)
         exit(EXIT_FAILURE);
     }
     printf("文件上传成功\n");
-    sleep(3);
     close(file_fd);
     return SUCCESS;
-
 }
 
 //下载文件
-static int fileDownload()
+static int fileDown(int sockfd, const char *userName)
 {
-   
+   //将想要下载的文件名传递给服务器
+    json_object *jobj = json_object_new_object();
+    json_object_object_add(jobj, "type", json_object_new_string("fileDown"));
+    json_object_object_add(jobj, "username", json_object_new_string(userName));
+
+    char fileName[BUFFER_SIZE] = {0};
+    printf("请输入要下载的文件名:");
+    char c[MAX_PATH] = {0}; // 目标目录路径
+    scanf("%s", fileName);
+
+    json_object_object_add(jobj, "filename", json_object_new_string(fileName));
+
+    const char *json = json_object_to_json_string(jobj);
+    SendJsonToServer(sockfd, json);
+    /* 释放jobj */
+    json_object_put(jobj);
+    jobj = NULL;
+    
+    printf("下载文件：%s\n", fileName);
+    return SUCCESS;
 }
+
+/* 下载写入文件 */
+static int fileDownLoad(int sockfd, json_object *json)
+{
+    json_object *fileDownPathJson = json_object_object_get(json, "DownPath");
+    json_object *usernameJson = json_object_object_get(json, "username");
+    json_object *filenameJson = json_object_object_get(json, "filename");
+
+
+    const char *fileDownPath = json_object_get_string(fileDownPathJson);
+    const char *username = json_object_get_string(usernameJson);
+    const char *filename = json_object_get_string(filenameJson);
+
+
+    /* 将接受的文件写入本地 */
+    char src_path[MAX_PATH] = {0};
+    sprintf(src_path, "/home/myChatRoom/myChatRoom/Client/usersData/%s/%s", username, filename);
+    
+    // 打开文件
+    int file_fd = open(src_path, O_WRONLY | O_CREAT | O_TRUNC, 0664);
+    if (file_fd < 0) 
+    {
+        perror("创建文件失败");
+        return ILLEGAL_ACCESS;
+    }
+    printf("创建文件成功\n");
+    sleep(1);
+
+    int dir_file_fd = open(fileDownPath, O_RDONLY);
+    if (dir_file_fd < 0) 
+    {
+        perror("打开文件失败");
+        return ILLEGAL_ACCESS;
+    }
+    printf("打开文件成功\n");
+
+    //读取文件内容并下载
+    size_t bytes_read;
+    char buffer[BUFFER_SIZE] = {0};
+    while((bytes_read = read(dir_file_fd, buffer, sizeof(buffer))) > 0) 
+    {
+        ssize_t bytes_written = write(file_fd, buffer, bytes_read);
+        if (bytes_written < 0) 
+        {
+            perror("写入文件内容失败");
+            exit(EXIT_FAILURE);
+        }
+        memset(buffer, 0, sizeof(buffer)); // 清空buffer，准备下一次读取
+    }
+   
+    if (bytes_read < 0) 
+    {
+        perror("写入文件内容失败");
+        close(file_fd);
+        exit(EXIT_FAILURE);
+    }
+    printf("文件下载成功\n");
+    close(file_fd);
+    return SUCCESS;
+}
+
 
 /* 显示文件 */
 int ChatRoomShowFile(int sockfd, json_object* friends, const char *username, const char * path)
@@ -1304,18 +1396,24 @@ int ChatRoomShowFile(int sockfd, json_object* friends, const char *username, con
     while(1)
     {   
         system("clear");
-        printf("\na.查看文件\nb.上传文件\n其他:返回上一级\n");
+        if(getDirectoryFiles(path) != SUCCESS)
+        {
+            return SUCCESS;
+        }
+        printf("\na.上传文件\nb.下载文件\nc.刷新文件列表\n其他:返回上一级\n");
         char ch;
         while ((ch = getchar()) == '\n');   // 读取一个非换行的字符
         while ((getchar()) != '\n');        // 吸收多余的字符
-        printf("ch:%d\n",ch);
+        // printf("ch:%d\n",ch);
         switch (ch)
         {
             case 'a':
-                getDirectoryFiles(path);
+                fileUpload(sockfd);
                 break;
             case 'b':
-                fileUpload(sockfd);
+                fileDown(sockfd, username);
+                break;
+            case 'c':
                 break;
             default:
                 return SUCCESS;
@@ -1386,11 +1484,11 @@ static int ChatRoomMain(int fd, json_object *json)
     /* 好友列表 */
     json_object * friends = json_object_object_get(json, "friends");
     const char *friend = json_object_get_string(friends);
-    printf("friend:%s\n",friend);
+    // printf("friend:%s\n",friend);
     /* 群组列表 */
     json_object * groups = json_object_object_get(json, "groups");
     const char *group = json_object_get_string(groups);
-    printf("group:%s\n",group);
+    // printf("group:%s\n",group);
 
     /* 处理可能有的未读消息 */
     /* 未读消息格式

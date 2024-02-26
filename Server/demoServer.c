@@ -67,7 +67,7 @@ int printfData(void *args)
 {
     int ret = 0;
     int val = *(int *)args;
-    printf("val:%s\n", val);
+    printf("val:%d\n", val);
     return ret;
 }
 int compareFunc(void *arg1, void *arg2)
@@ -114,9 +114,10 @@ static int createGroupChat(int client_fd, json_object *json, MYSQL *mysql);
 static int joinGroupChat(int client_fd, json_object *json, MYSQL *mysql);
 /* 退出群聊 */
 static int quitGroupChat(int client_fd, json_object *json, MYSQL *mysql);
-
-//接收文件
+/* 上传文件 */
 static int fileUpload(int client_fd, json_object *json,  MYSQL *mysql);
+//下载文件
+static int fileUpDown(int client_fd, json_object *json,  MYSQL *mysql);
 
 /* 拼接路径 */
 static int JoinPath(char *path, const char *dir, const char *filename)
@@ -402,6 +403,7 @@ int main()
 #endif
         // break;
     }
+    threadPollDestroy(&poll);
     close(server_fd);
     return 0;
 }
@@ -551,6 +553,13 @@ void *handleRequest(void* arg)
             /* 消除没用的请求类型*/
             json_object_object_del(jobj, "type");
             fileUpload(client_fd, jobj, mysql);
+        }
+        else if(strcmp(typeStr, "fileDown") == 0)
+        {
+            /* 创建查看文件 */
+            /* 消除没用的请求类型*/
+            json_object_object_del(jobj, "type");
+            fileUpDown(client_fd, jobj, mysql);
         }
         else
         {
@@ -902,7 +911,7 @@ static int sqlQuery(const char *sql, MYSQL *mysql, MYSQL_RES **res)
         return DATABASE_ERROR;
     }
     *res = mysql_store_result(mysql);
-    if (*res == NULL)
+    if (res == NULL)
     {
         printf("sql store result error:%s\n", mysql_error(mysql));
         return DATABASE_ERROR;
@@ -1777,7 +1786,7 @@ static int receiveFile(int client_fd, int file_fd)
         // 清空buffer
         memset(buffer, 0, sizeof(buffer));
     }
-
+    memset(buffer, 0, sizeof(buffer));
     if (bytes_received < 0) 
     {
         perror("接收文件内容失败");
@@ -1822,5 +1831,41 @@ static int fileUpload(int client_fd, json_object *json,  MYSQL *mysql)
     }
 }
 
+//下载文件
+static int fileUpDown(int client_fd, json_object *json,  MYSQL *mysql)
+{
+    json_object *usernameJson = json_object_object_get(json, "username");
+    const char *userName = json_object_get_string(usernameJson);
+    json_object *filenameJson = json_object_object_get(json, "filename");
+    const char *fileName = json_object_get_string(filenameJson);
+    printf("username:%s\n", userName);
+    printf("fileName:%s\n", fileName);
 
 
+    // 打开文件
+    char src_path[1024 * 2] = {0};
+    char dir[1024] = {"/home/myChatRoom/myChatRoom/Server/fileDirectory"};//文件缓存目录
+    JoinPath(src_path, dir, fileName);
+    printf("文件路径：%s\n", src_path);
+    
+    json_object *returnJson = json_object_new_object();
+
+    /* 查询数据库 */
+    /* 返回json */
+    json_object_object_add(returnJson, "type", json_object_new_string("fileDown"));
+    json_object_object_add(returnJson, "DownPath",json_object_new_string(src_path));
+    json_object_object_add(returnJson, "username",json_object_new_string(userName));
+    json_object_object_add(returnJson, "filename",json_object_new_string(fileName));
+
+
+    /* 发送json */
+    const char *returnJsonStr = json_object_to_json_string(returnJson);
+    printf("returnJsonStr:%s\n", returnJsonStr);
+    if(send(client_fd, returnJsonStr, strlen(returnJsonStr), 0) < 0)
+    {
+       perror("send error");
+       return SEND_ERROR; 
+    }
+    json_object_put(returnJson);
+    return SUCCESS;
+}
